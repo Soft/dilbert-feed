@@ -1,0 +1,9 @@
+[package]
+authors = ["Samuel Laurén <samuel.lauren@iki.fi>"]
+name = "dilbert-feed"
+version = "0.1.0"
+
+[dependencies]
+atom_syndication = "0.5.7"
+reqwest = "0.8.4"
+select = "0.4.2"
