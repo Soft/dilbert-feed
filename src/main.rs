@@ -2,14 +2,26 @@ extern crate atom_syndication;
 extern crate reqwest;
 extern crate select;
 extern crate failure;
+extern crate structopt;
+#[macro_use]
+extern crate structopt_derive;
 
 use atom_syndication::{Feed, Content};
 use std::io::BufReader;
+use std::fs::File;
 use select::document::Document;
 use select::predicate::Class;
 use failure::{Error, err_msg};
+use structopt::StructOpt;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
+
+#[derive(StructOpt)]
+#[structopt(name = "dilbert-feed", about = "Generate Dilbert Atom feed with images.")]
+struct Command {
+    #[structopt(help = "Output file")]
+    output: Option<String>
+}
 
 fn extract_image_url(url: &str) -> Result<String, Error> {
     let response = reqwest::get(url)?;
@@ -54,11 +66,21 @@ fn create_feed() -> Result<Feed, Error> {
     Ok(feed)
 }
 
+fn process() -> Result<(), Error> {
+    let options = Command::from_args();
+    let feed = create_feed()?;
+    if let Some(path) = options.output {
+        let mut file = File::create(path)?;
+        feed.write_to(file)
+            .map_err(|_| err_msg("failed to serialize feed"))?;
+    } else {
+        println!("{}", feed.to_string());
+    }
+    Ok(())
+}
+
 fn main() {
-    match create_feed() {
-        Ok(feed) => {
-            println!("{}", feed.to_string());
-        },
-        Err(err) => eprintln!("{}", err)
+    if let Err(err) = process() {
+        eprintln!("{}", err)
     }
 }
