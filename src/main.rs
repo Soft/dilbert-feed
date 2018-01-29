@@ -3,6 +3,7 @@ extern crate reqwest;
 extern crate select;
 extern crate failure;
 extern crate htmlescape;
+extern crate rayon;
 extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
@@ -15,6 +16,7 @@ use failure::{Error, err_msg};
 use select::document::Document;
 use select::predicate::Class;
 use structopt::StructOpt;
+use rayon::prelude::*;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
 
@@ -63,7 +65,7 @@ fn create_feed(url: Option<&str>) -> Result<Feed, Error> {
                    .collect::<Vec<_>>());
 
     let entries: Result<Vec<_>, Error> = feed.entries()
-        .iter()
+        .par_iter()
         .cloned()
         .map(|mut entry| {
             let url = entry.links().iter().next()
