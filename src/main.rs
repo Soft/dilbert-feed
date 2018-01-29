@@ -6,12 +6,13 @@ extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
 
+use std::fs::File;
+use std::io::BufReader;
+use std::process;
 use atom_syndication::{Feed, Content};
 use failure::{Error, err_msg};
 use select::document::Document;
 use select::predicate::Class;
-use std::fs::File;
-use std::io::BufReader;
 use structopt::StructOpt;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
@@ -81,6 +82,7 @@ fn process() -> Result<(), Error> {
 
 fn main() {
     if let Err(err) = process() {
-        eprintln!("{}", err)
+        eprintln!("{}", err);
+        process::exit(1);
     }
 }
