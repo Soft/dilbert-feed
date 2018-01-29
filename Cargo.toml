@@ -1,15 +1,16 @@
 [package]
 authors = ["Samuel Laurén <samuel.lauren@iki.fi>"]
-name = "dilbert-feed"
 description = "Generate Dilbert Atom feed with images."
+license = "MIT"
+name = "dilbert-feed"
+publish = false
 repository = "https://bitbucket.org/Soft/dilbert-feed"
 version = "0.1.0"
-license = "MIT"
-publish = false
 
 [dependencies]
 atom_syndication = "0.5.7"
 failure = "0.1.1"
+htmlescape = "0.3.1"
 reqwest = "0.8.4"
 select = "0.4.2"
 structopt = "0.1.7"
