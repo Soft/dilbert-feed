@@ -11,12 +11,12 @@ extern crate structopt_derive;
 use std::fs::File;
 use std::io::BufReader;
 use std::process;
-use atom_syndication::{Feed, Content, LinkBuilder};
+use atom_syndication::{Feed, Content, ContentBuilder, LinkBuilder};
 use failure::{Error, err_msg};
+use rayon::prelude::*;
 use select::document::Document;
 use select::predicate::Class;
 use structopt::StructOpt;
-use rayon::prelude::*;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
 
@@ -29,22 +29,22 @@ struct Command {
     output: Option<String>
 }
 
-fn extract_image_url(url: &str) -> Result<String, Error> {
+fn extract_image_url(url: &str) -> Result<Option<String>, Error> {
     let response = reqwest::get(url)?;
     let response = Document::from_read(response)?;
     let image = response.find(Class("img-comic"))
-        .next().ok_or(err_msg("missing image"))?;
-    Ok(image.attr("src")
-       .ok_or(err_msg("invalid image"))?
-       .to_owned())
+        .next()
+        .and_then(|image| image.attr("src"))
+        .map(|url| url.to_owned());
+    Ok(image)
 }
 
 fn create_content(url: &str) -> Content {
-    let mut content = Content::default();
-    content.set_content_type(Some("html".to_owned()));
-    content.set_value(htmlescape::encode_minimal(
-        &format!(r#"<img src="{}">"#, url)));
-    content
+    ContentBuilder::default()
+        .content_type("html".to_owned())
+        .value(htmlescape::encode_minimal(&format!(r#"<img src="{}">"#, url)))
+        .build()
+        .unwrap()
 }
 
 fn create_feed(url: Option<&str>) -> Result<Feed, Error> {
@@ -67,16 +67,23 @@ fn create_feed(url: Option<&str>) -> Result<Feed, Error> {
     let entries: Result<Vec<_>, Error> = feed.entries()
         .par_iter()
         .cloned()
-        .map(|mut entry| {
+        .filter_map(|mut entry| {
             let url = entry.links().iter().next()
-                .ok_or(err_msg("missing link"))?
-                .href()
-                .to_owned();
-            let image_url = extract_image_url(&url)?;
+                .ok_or(err_msg("missing link"))
+                .map(|link| link.href().to_owned());
+            let url = match url {
+                Ok(url) => url,
+                Err(err) => return Some(Err(err))
+            };
+            let image_url = match extract_image_url(&url) {
+                Ok(Some(url)) => url,
+                Ok(None) => return None,
+                Err(err) => return Some(Err(err))
+            };
             let content = create_content(&image_url);
             entry.set_content(content);
             entry.set_id(url);
-            Ok(entry)
+            Some(Ok(entry))
         })
         .collect();
     feed.set_entries(entries?);
