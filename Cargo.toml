@@ -5,7 +5,7 @@ license = "MIT"
 name = "dilbert-feed"
 publish = false
 repository = "https://bitbucket.org/Soft/dilbert-feed"
-version = "0.1.0"
+version = "0.1.1"
 
 [dependencies]
 atom_syndication = "0.5.7"
