@@ -1,3 +1,5 @@
+#![feature(conservative_impl_trait)]
+
 extern crate atom_syndication;
 extern crate failure;
 extern crate futures;
@@ -9,19 +11,19 @@ extern crate structopt;
 extern crate structopt_derive;
 extern crate tokio_core;
 
-use std::fs::File;
-use std::process;
-
-use atom_syndication::{Content, ContentBuilder, Entry, Feed, LinkBuilder};
+use atom_syndication::{Content, ContentBuilder, Feed, LinkBuilder};
 use failure::{err_msg, Error};
+use futures::future::{join_all, ok, result};
+use futures::{Future, Stream};
+use hyper::Uri;
+use hyper::client::{Client, HttpConnector};
 use select::document::Document;
 use select::predicate::Class;
 use structopt::StructOpt;
 use tokio_core::reactor::Core;
-use futures::{Future, Stream};
-use futures::future::{join_all, ok, result};
-use hyper::client::{Client, HttpConnector};
-use hyper::Uri;
+
+use std::fs::File;
+use std::process;
 use std::str::FromStr;
 use std::str;
 
@@ -37,25 +39,23 @@ struct Command {
 }
 
 fn extract_image_url(
-    client: Client<HttpConnector>,
+    client: &Client<HttpConnector>,
     url: Uri,
-) -> Box<Future<Item = Option<String>, Error = Error>> {
-    Box::new(
-        client
-            .get(url)
-            .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
-            .from_err()
-            .and_then(|bytes| {
-                let source = str::from_utf8(&bytes)?;
-                let document = Document::from(source);
-                let image = document
-                    .find(Class("img-comic"))
-                    .next()
-                    .and_then(|image| image.attr("src"))
-                    .map(|url| url.to_owned());
-                Ok(image)
-            }),
-    )
+) -> impl Future<Item = Option<String>, Error = Error> {
+    client
+        .get(url)
+        .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
+        .from_err()
+        .and_then(|bytes| {
+            let source = str::from_utf8(&bytes)?;
+            let document = Document::from(source);
+            let image = document
+                .find(Class("img-comic"))
+                .next()
+                .and_then(|image| image.attr("src"))
+                .map(|url| url.to_owned());
+            Ok(image)
+        })
 }
 
 fn create_content(url: &str) -> Content {
@@ -72,75 +72,65 @@ fn create_content(url: &str) -> Content {
 fn create_feed(
     client: Client<HttpConnector>,
     feed_url: Option<String>,
-) -> Box<Future<Item = Feed, Error = Error>> {
+) -> impl Future<Item = Feed, Error = Error> {
     let uri = Uri::from_str(SOURCE_URL).unwrap();
 
-    Box::new(
-        client
-            .get(uri)
-            .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
-            .from_err()
-            .and_then(|bytes| result(String::from_utf8(bytes).map_err(From::from)))
-            .and_then(|source| result(Feed::from_str(&source).map_err(|_| err_msg("invalid feed"))))
-            .and_then(move |mut feed| {
-                feed.set_links(
-                    feed_url
-                        .iter()
-                        .cloned()
-                        .map(|url| {
-                            LinkBuilder::default()
-                                .href(url)
-                                .rel("self")
-                                .mime_type(Some("application/atom+xml".to_owned()))
-                                .build()
-                                .unwrap()
-                        })
-                        .collect::<Vec<_>>(),
-                );
+    client
+        .get(uri)
+        .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
+        .from_err()
+        .and_then(|bytes| String::from_utf8(bytes).map_err(From::from))
+        .and_then(|source| Feed::from_str(&source).map_err(|_| err_msg("invalid feed")))
+        .and_then(move |mut feed| {
+            feed.set_links(
+                feed_url
+                    .iter()
+                    .cloned()
+                    .map(|url| {
+                        LinkBuilder::default()
+                            .href(url)
+                            .rel("self")
+                            .mime_type(Some("application/atom+xml".to_owned()))
+                            .build()
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>(),
+            );
 
-                result(
-                    feed.entries()
-                        .iter()
-                        .cloned()
-                        .filter_map(
-                            |mut entry| -> Option<
-                                Result<Box<Future<Item = Option<Entry>, Error = Error>>, Error>,
-                            > {
-                                let url = entry
-                                    .links()
-                                    .iter()
-                                    .next()
-                                    .ok_or(err_msg("missing link"))
-                                    .map(|link| link.href())
-                                    .and_then(|address| Uri::from_str(address).map_err(From::from));
-                                let url = match url {
-                                    Ok(url) => url,
-                                    Err(err) => return Some(Err(err)),
-                                };
-                                let future = extract_image_url(client.clone(), url.clone()).map(
-                                    move |image_url| {
-                                        let content = create_content(&image_url?);
-                                        entry.set_content(content);
-                                        entry.set_id(url.as_ref().to_owned());
-                                        Some(entry)
-                                    },
-                                );
-                                Some(Ok(Box::new(future)))
-                            },
-                        )
-                        .collect(),
-                ).and_then(
-                    |entries: Vec<Box<Future<Item = Option<Entry>, Error = Error>>>| {
-                        join_all(entries).and_then(|entries| {
-                            let entries: Vec<_> =
-                                entries.into_iter().filter_map(|entry| entry).collect();
-                            feed.set_entries(entries);
-                            Ok(feed)
-                        })
-                    },
-                )
-            }),
-    )
+            result(
+                feed.entries()
+                    .iter()
+                    .cloned()
+                    .filter_map(|mut entry| -> Option<Result<_, Error>> {
+                        let url = entry
+                            .links()
+                            .iter()
+                            .next()
+                            .ok_or(err_msg("missing link"))
+                            .map(|link| link.href())
+                            .and_then(|address| Uri::from_str(address).map_err(From::from));
+                        let url = match url {
+                            Ok(url) => url,
+                            Err(err) => return Some(Err(err)),
+                        };
+                        let future =
+                            extract_image_url(&client, url.clone()).map(move |image_url| {
+                                let content = create_content(&image_url?);
+                                entry.set_content(content);
+                                entry.set_id(url.as_ref().to_owned());
+                                Some(entry)
+                            });
+                        Some(Ok(future))
+                    })
+                    .collect(),
+            ).and_then(|entries: Vec<_>| {
+                join_all(entries).and_then(|entries| {
+                    let entries: Vec<_> = entries.into_iter().filter_map(|entry| entry).collect();
+                    feed.set_entries(entries);
+                    Ok(feed)
+                })
+            })
+        })
 }
 
 fn process() -> Result<(), Error> {
