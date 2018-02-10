@@ -1,22 +1,29 @@
 extern crate atom_syndication;
-extern crate reqwest;
-extern crate select;
 extern crate failure;
+extern crate futures;
 extern crate htmlescape;
-extern crate rayon;
+extern crate hyper;
+extern crate select;
 extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
+extern crate tokio_core;
 
 use std::fs::File;
-use std::io::BufReader;
 use std::process;
-use atom_syndication::{Feed, Content, ContentBuilder, LinkBuilder};
-use failure::{Error, err_msg};
-use rayon::prelude::*;
+
+use atom_syndication::{Content, ContentBuilder, Entry, Feed, LinkBuilder};
+use failure::{err_msg, Error};
 use select::document::Document;
 use select::predicate::Class;
 use structopt::StructOpt;
+use tokio_core::reactor::Core;
+use futures::{Future, Stream};
+use futures::future::{join_all, ok, result};
+use hyper::client::{Client, HttpConnector};
+use hyper::Uri;
+use std::str::FromStr;
+use std::str;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
 
@@ -26,81 +33,136 @@ struct Command {
     #[structopt(short = "u", long = "url", help = "URL for the feed")]
     url: Option<String>,
     #[structopt(help = "Output file")]
-    output: Option<String>
+    output: Option<String>,
 }
 
-fn extract_image_url(url: &str) -> Result<Option<String>, Error> {
-    let response = reqwest::get(url)?;
-    let response = Document::from_read(response)?;
-    let image = response.find(Class("img-comic"))
-        .next()
-        .and_then(|image| image.attr("src"))
-        .map(|url| url.to_owned());
-    Ok(image)
+fn extract_image_url(
+    client: Client<HttpConnector>,
+    url: Uri,
+) -> Box<Future<Item = Option<String>, Error = Error>> {
+    Box::new(
+        client
+            .get(url)
+            .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
+            .from_err()
+            .and_then(|bytes| {
+                let source = str::from_utf8(&bytes)?;
+                let document = Document::from(source);
+                let image = document
+                    .find(Class("img-comic"))
+                    .next()
+                    .and_then(|image| image.attr("src"))
+                    .map(|url| url.to_owned());
+                Ok(image)
+            }),
+    )
 }
 
 fn create_content(url: &str) -> Content {
     ContentBuilder::default()
         .content_type("html".to_owned())
-        .value(htmlescape::encode_minimal(&format!(r#"<img src="{}">"#, url)))
+        .value(htmlescape::encode_minimal(&format!(
+            r#"<img src="{}">"#,
+            url
+        )))
         .build()
         .unwrap()
 }
 
-fn create_feed(url: Option<&str>) -> Result<Feed, Error> {
-    let response = reqwest::get(SOURCE_URL)?;
-    let response = BufReader::new(response);
+fn create_feed(
+    client: Client<HttpConnector>,
+    feed_url: Option<String>,
+) -> Box<Future<Item = Feed, Error = Error>> {
+    let uri = Uri::from_str(SOURCE_URL).unwrap();
 
-    let mut feed = Feed::read_from(response)
-        .map_err(|_| err_msg("invalid feed"))?
-        .clone();
-    feed.set_links(url.iter()
-                   .cloned()
-                   .map(|url| LinkBuilder::default()
-                        .href(url)
-                        .rel("self")
-                        .mime_type(Some("application/atom+xml".to_owned()))
-                        .build()
-                        .unwrap())
-                   .collect::<Vec<_>>());
+    Box::new(
+        client
+            .get(uri)
+            .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
+            .from_err()
+            .and_then(|bytes| result(String::from_utf8(bytes).map_err(From::from)))
+            .and_then(|source| result(Feed::from_str(&source).map_err(|_| err_msg("invalid feed"))))
+            .and_then(move |mut feed| {
+                feed.set_links(
+                    feed_url
+                        .iter()
+                        .cloned()
+                        .map(|url| {
+                            LinkBuilder::default()
+                                .href(url)
+                                .rel("self")
+                                .mime_type(Some("application/atom+xml".to_owned()))
+                                .build()
+                                .unwrap()
+                        })
+                        .collect::<Vec<_>>(),
+                );
 
-    let entries: Result<Vec<_>, Error> = feed.entries()
-        .par_iter()
-        .cloned()
-        .filter_map(|mut entry| {
-            let url = entry.links().iter().next()
-                .ok_or(err_msg("missing link"))
-                .map(|link| link.href().to_owned());
-            let url = match url {
-                Ok(url) => url,
-                Err(err) => return Some(Err(err))
-            };
-            let image_url = match extract_image_url(&url) {
-                Ok(Some(url)) => url,
-                Ok(None) => return None,
-                Err(err) => return Some(Err(err))
-            };
-            let content = create_content(&image_url);
-            entry.set_content(content);
-            entry.set_id(url);
-            Some(Ok(entry))
-        })
-        .collect();
-    feed.set_entries(entries?);
-    Ok(feed)
+                result(
+                    feed.entries()
+                        .iter()
+                        .cloned()
+                        .filter_map(
+                            |mut entry| -> Option<
+                                Result<Box<Future<Item = Option<Entry>, Error = Error>>, Error>,
+                            > {
+                                let url = entry
+                                    .links()
+                                    .iter()
+                                    .next()
+                                    .ok_or(err_msg("missing link"))
+                                    .map(|link| link.href())
+                                    .and_then(|address| Uri::from_str(address).map_err(From::from));
+                                let url = match url {
+                                    Ok(url) => url,
+                                    Err(err) => return Some(Err(err)),
+                                };
+                                let future = extract_image_url(client.clone(), url.clone()).map(
+                                    move |image_url| {
+                                        let content = create_content(&image_url?);
+                                        entry.set_content(content);
+                                        entry.set_id(url.as_ref().to_owned());
+                                        Some(entry)
+                                    },
+                                );
+                                Some(Ok(Box::new(future)))
+                            },
+                        )
+                        .collect(),
+                ).and_then(
+                    |entries: Vec<Box<Future<Item = Option<Entry>, Error = Error>>>| {
+                        join_all(entries).and_then(|entries| {
+                            let entries: Vec<_> =
+                                entries.into_iter().filter_map(|entry| entry).collect();
+                            feed.set_entries(entries);
+                            Ok(feed)
+                        })
+                    },
+                )
+            }),
+    )
 }
 
 fn process() -> Result<(), Error> {
     let options = Command::from_args();
-    let feed = create_feed(options.url.as_ref().map(|s| &**s))?;
-    if let Some(path) = options.output {
-        let mut file = File::create(path)?;
-        feed.write_to(file)
-            .map_err(|_| err_msg("failed to serialize feed"))?;
-    } else {
-        println!("{}", feed.to_string());
-    }
-    Ok(())
+    let mut core = Core::new()?;
+    let client = Client::new(&core.handle());
+    let future = create_feed(client, options.url.clone()).and_then(
+        |feed| -> Box<Future<Item = (), Error = Error>> {
+            if let Some(path) = options.output {
+                Box::new(result(File::create(path)).from_err().and_then(move |file| {
+                    result(
+                        feed.write_to(file)
+                            .map(|_| ())
+                            .map_err(|_| err_msg("failed to serialize feed")),
+                    )
+                }))
+            } else {
+                Box::new(ok(println!("{}", feed.to_string())))
+            }
+        },
+    );
+    core.run(future)
 }
 
 fn main() {
