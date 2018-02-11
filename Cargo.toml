@@ -17,3 +17,7 @@ select = "0.4.2"
 structopt = "0.1.7"
 structopt-derive = "0.1.6"
 tokio-core = "0.1.12"
+
+[profile.release]
+panic = "abort"
+lto = true

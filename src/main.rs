@@ -1,4 +1,5 @@
-#![feature(conservative_impl_trait)]
+#![feature(conservative_impl_trait,alloc_system)]
+extern crate alloc_system;
 
 extern crate atom_syndication;
 extern crate failure;
@@ -13,7 +14,7 @@ extern crate tokio_core;
 
 use atom_syndication::{Content, ContentBuilder, Feed, LinkBuilder};
 use failure::{err_msg, Error};
-use futures::future::{join_all, ok, result};
+use futures::future::{join_all, result};
 use futures::{Future, Stream};
 use hyper::Uri;
 use hyper::client::{Client, HttpConnector};
@@ -138,18 +139,14 @@ fn process() -> Result<(), Error> {
     let mut core = Core::new()?;
     let client = Client::new(&core.handle());
     let future = create_feed(client, options.url.clone()).and_then(
-        |feed| -> Box<Future<Item = (), Error = Error>> {
+        |feed| {
             if let Some(path) = options.output {
-                Box::new(result(File::create(path)).from_err().and_then(move |file| {
-                    result(
-                        feed.write_to(file)
-                            .map(|_| ())
-                            .map_err(|_| err_msg("failed to serialize feed")),
-                    )
-                }))
+                let mut file = File::create(path)?;
+                feed.write_to(file).map_err(|_| err_msg("failed to serialize feed"))?;
             } else {
-                Box::new(ok(println!("{}", feed.to_string())))
+                println!("{}", feed.to_string())
             }
+            Ok(())
         },
     );
     core.run(future)
