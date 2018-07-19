@@ -27,6 +27,7 @@ use std::str::FromStr;
 use std::str;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
+const ICON_URL: &str = "http://dilbert.com/favicon.ico";
 
 #[global_allocator]
 static ALLOCATOR: System = System;
@@ -110,6 +111,7 @@ fn create_feed(
                     })
                     .collect::<Vec<_>>(),
             );
+            feed.set_icon(Some(ICON_URL.to_owned()));
 
             result(
                 feed.entries()
