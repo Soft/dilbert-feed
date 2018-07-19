@@ -1,6 +1,3 @@
-#![feature(alloc_system)]
-extern crate alloc_system;
-
 extern crate atom_syndication;
 extern crate failure;
 extern crate futures;
@@ -23,12 +20,16 @@ use select::predicate::Class;
 use structopt::StructOpt;
 use tokio_core::reactor::Core;
 
+use std::alloc::System;
 use std::fs::File;
 use std::process;
 use std::str::FromStr;
 use std::str;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
+
+#[global_allocator]
+static ALLOCATOR: System = System;
 
 #[derive(StructOpt)]
 #[structopt(name = "dilbert-feed", about = "Generate Dilbert Atom feed with images.")]
