@@ -64,7 +64,10 @@ fn extract_comic_info(
             let title = document
                 .find(Class("comic-title-name"))
                 .next()
-                .map(|title| title.text());
+                .map(|title| title.text()
+                     .trim()
+                     .to_owned())
+                .filter(|title| !title.is_empty());
             Ok(ComicInfo { title, image_url })
         })
 }
