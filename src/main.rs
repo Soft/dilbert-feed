@@ -1,4 +1,4 @@
-#![feature(conservative_impl_trait,alloc_system)]
+#![feature(alloc_system)]
 extern crate alloc_system;
 
 extern crate atom_syndication;
@@ -39,10 +39,15 @@ struct Command {
     output: Option<String>,
 }
 
-fn extract_image_url(
+struct ComicInfo {
+    title: Option<String>,
+    image_url: Option<String>
+}
+
+fn extract_comic_info(
     client: &Client<HttpConnector>,
     url: Uri,
-) -> impl Future<Item = Option<String>, Error = Error> {
+) -> impl Future<Item = ComicInfo, Error = Error> {
     client
         .get(url)
         .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
@@ -50,12 +55,16 @@ fn extract_image_url(
         .and_then(|bytes| {
             let source = str::from_utf8(&bytes)?;
             let document = Document::from(source);
-            let image = document
+            let image_url = document
                 .find(Class("img-comic"))
                 .next()
                 .and_then(|image| image.attr("src"))
                 .map(|url| url.to_owned());
-            Ok(image)
+            let title = document
+                .find(Class("comic-title-name"))
+                .next()
+                .map(|title| title.text());
+            Ok(ComicInfo { title, image_url })
         })
 }
 
@@ -115,10 +124,13 @@ fn create_feed(
                             Err(err) => return Some(Err(err)),
                         };
                         let future =
-                            extract_image_url(&client, url.clone()).map(move |image_url| {
-                                let content = create_content(&image_url?);
+                            extract_comic_info(&client, url.clone()).map(move |info| {
+                                let content = create_content(&info.image_url?);
                                 entry.set_content(content);
                                 entry.set_id(url.as_ref().to_owned());
+                                if let Some(title) = info.title {
+                                    entry.set_title(title);
+                                }
                                 Some(entry)
                             });
                         Some(Ok(future))
