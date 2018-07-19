@@ -120,7 +120,7 @@ fn create_feed(
                             .links()
                             .iter()
                             .next()
-                            .ok_or(err_msg("missing link"))
+                            .ok_or_else(|| err_msg("missing link"))
                             .map(|link| link.href())
                             .and_then(|address| Uri::from_str(address).map_err(From::from));
                         let url = match url {
