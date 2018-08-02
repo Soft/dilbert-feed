@@ -1,4 +1,4 @@
-image: ekidd/rust-musl-builder:nightly
+image: ekidd/rust-musl-builder:stable
 
 pipelines:
   default:
