@@ -1,0 +1,25 @@
+language: generic
+sudo: required
+
+services:
+  - docker
+
+before_install:
+  - docker pull ekidd/rust-musl-builder:stable
+  - docker run -it -d --name build ekidd/rust-musl-builder:stable bash
+  - docker exec build git clone https://github.com/Soft/dilbert-feed.git .
+  - docker exec build git checkout $TRAVIS_COMMIT
+  - mkdir target
+
+script:
+  - docker exec build bash -c "cargo build --release"
+  - docker exec build strip target/x86_64-unknown-linux-musl/release/dilbert-feed
+  - docker cp build:/home/rust/src/target/x86_64-unknown-linux-musl/release/dilbert-feed target/dilbert-feed
+
+deploy:
+  provider: releases
+  api_key: $GITHUB_OAUTH_TOKEN
+  file: target/dilbert-feed
+  skip_cleanup: true
+  on:
+    branch: master
