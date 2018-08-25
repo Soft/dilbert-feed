@@ -1,6 +1,5 @@
 extern crate atom_syndication;
 extern crate failure;
-extern crate futures;
 extern crate htmlescape;
 extern crate hyper;
 extern crate select;

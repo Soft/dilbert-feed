@@ -10,7 +10,6 @@ version = "0.1.1"
 [dependencies]
 atom_syndication = "0.6.0"
 failure = "0.1.2"
-futures = "0.1.23"
 htmlescape = "0.3.1"
 hyper = "0.12.8"
 select = "0.4.2"
