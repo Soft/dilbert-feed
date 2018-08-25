@@ -7,24 +7,24 @@ extern crate select;
 extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
-extern crate tokio_core;
+extern crate tokio;
 
 use atom_syndication::{Content, ContentBuilder, Feed, LinkBuilder};
 use failure::{err_msg, Error};
-use futures::future::{join_all, result};
-use futures::{Future, Stream};
-use hyper::Uri;
+use hyper::body::Body;
 use hyper::client::{Client, HttpConnector};
+use hyper::{Response, Uri};
 use select::document::Document;
 use select::predicate::Class;
 use structopt::StructOpt;
-use tokio_core::reactor::Core;
+use tokio::prelude::*;
+use tokio::runtime::Runtime;
 
 use std::alloc::System;
 use std::fs::File;
 use std::process;
-use std::str::FromStr;
 use std::str;
+use std::str::FromStr;
 
 const SOURCE_URL: &str = "http://dilbert.com/feed";
 const ICON_URL: &str = "http://dilbert.com/favicon.ico";
@@ -43,7 +43,11 @@ struct Command {
 
 struct ComicInfo {
     title: Option<String>,
-    image_url: Option<String>
+    image_url: Option<String>,
+}
+
+fn concat_body(response: Response<Body>) -> impl Future<Item = Vec<u8>, Error = hyper::Error> {
+    response.into_body().concat2().map(|chunk| chunk.to_vec())
 }
 
 fn extract_comic_info(
@@ -52,7 +56,7 @@ fn extract_comic_info(
 ) -> impl Future<Item = ComicInfo, Error = Error> {
     client
         .get(url)
-        .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
+        .and_then(concat_body)
         .from_err()
         .and_then(|bytes| {
             let source = str::from_utf8(&bytes)?;
@@ -65,9 +69,7 @@ fn extract_comic_info(
             let title = document
                 .find(Class("comic-title-name"))
                 .next()
-                .map(|title| title.text()
-                     .trim()
-                     .to_owned())
+                .map(|title| title.text().trim().to_owned())
                 .filter(|title| !title.is_empty());
             Ok(ComicInfo { title, image_url })
         })
@@ -92,7 +94,7 @@ fn create_feed(
 
     client
         .get(uri)
-        .and_then(|resp| resp.body().concat2().map(|chunk| chunk.to_vec()))
+        .and_then(concat_body)
         .from_err()
         .and_then(|bytes| String::from_utf8(bytes).map_err(From::from))
         .and_then(|source| Feed::from_str(&source).map_err(|_| err_msg("invalid feed")))
@@ -113,7 +115,7 @@ fn create_feed(
             );
             feed.set_icon(Some(ICON_URL.to_owned()));
 
-            result(
+            future::result(
                 feed.entries()
                     .iter()
                     .cloned()
@@ -129,21 +131,20 @@ fn create_feed(
                             Ok(url) => url,
                             Err(err) => return Some(Err(err)),
                         };
-                        let future =
-                            extract_comic_info(&client, url.clone()).map(move |info| {
-                                let content = create_content(&info.image_url?);
-                                entry.set_content(content);
-                                entry.set_id(url.as_ref().to_owned());
-                                if let Some(title) = info.title {
-                                    entry.set_title(title);
-                                }
-                                Some(entry)
-                            });
+                        let future = extract_comic_info(&client, url.clone()).map(move |info| {
+                            let content = create_content(&info.image_url?);
+                            entry.set_content(content);
+                            entry.set_id(url.to_string());
+                            if let Some(title) = info.title {
+                                entry.set_title(title);
+                            }
+                            Some(entry)
+                        });
                         Some(Ok(future))
                     })
                     .collect(),
             ).and_then(|entries: Vec<_>| {
-                join_all(entries).and_then(|entries| {
+                future::join_all(entries).and_then(|entries| {
                     let entries: Vec<_> = entries.into_iter().filter_map(|entry| entry).collect();
                     feed.set_entries(entries);
                     Ok(feed)
@@ -154,20 +155,19 @@ fn create_feed(
 
 fn process() -> Result<(), Error> {
     let options = Command::from_args();
-    let mut core = Core::new()?;
-    let client = Client::new(&core.handle());
-    let future = create_feed(client, options.url.clone()).and_then(
-        |feed| {
-            if let Some(path) = options.output {
-                let mut file = File::create(path)?;
-                feed.write_to(file).map_err(|_| err_msg("failed to serialize feed"))?;
-            } else {
-                println!("{}", feed.to_string())
-            }
-            Ok(())
-        },
-    );
-    core.run(future)
+    let runtime = Runtime::new()?;
+    let client = Client::new();
+    let feed_creator = create_feed(client, options.url.clone()).and_then(|feed| {
+        if let Some(path) = options.output {
+            let mut file = File::create(path)?;
+            feed.write_to(file)
+                .map_err(|_| err_msg("failed to serialize feed"))?;
+        } else {
+            println!("{}", feed.to_string())
+        }
+        Ok(())
+    });
+    runtime.block_on_all(feed_creator)
 }
 
 fn main() {
