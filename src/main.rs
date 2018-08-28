@@ -1,9 +1,11 @@
 extern crate atom_syndication;
+extern crate base64;
 extern crate failure;
 extern crate htmlescape;
 extern crate hyper;
 extern crate select;
 extern crate structopt;
+extern crate tree_magic;
 #[macro_use]
 extern crate structopt_derive;
 extern crate tokio;
@@ -36,10 +38,13 @@ static ALLOCATOR: System = System;
 struct Command {
     #[structopt(short = "u", long = "url", help = "URL for the feed")]
     url: Option<String>,
+    #[structopt(short = "e", long = "embed", help = "Embed images")]
+    embed: bool,
     #[structopt(help = "Output file")]
     output: Option<String>,
 }
 
+#[derive(Clone)]
 struct ComicInfo {
     title: Option<String>,
     image_url: Option<String>,
@@ -74,6 +79,21 @@ fn extract_comic_info(
         })
 }
 
+fn create_data_url(
+    client: &Client<HttpConnector>,
+    url: Uri,
+) -> impl Future<Item = String, Error = Error> {
+    client
+        .get(url)
+        .and_then(concat_body)
+        .from_err()
+        .map(|bytes| {
+            let mime = tree_magic::from_u8(&bytes);
+            let encoded = base64::encode(&bytes);
+            format!("data:{};base64,{}", mime, encoded)
+        })
+}
+
 fn create_content(url: &str) -> Content {
     ContentBuilder::default()
         .content_type("html".to_owned())
@@ -88,6 +108,7 @@ fn create_content(url: &str) -> Content {
 fn create_feed(
     client: Client<HttpConnector>,
     feed_url: Option<String>,
+    embed_images: bool,
 ) -> impl Future<Item = Feed, Error = Error> {
     let uri = Uri::from_str(SOURCE_URL).unwrap();
 
@@ -114,23 +135,40 @@ fn create_feed(
             );
             feed.set_icon(Some(ICON_URL.to_owned()));
 
-            future::result(
-                feed.entries()
-                    .iter()
-                    .cloned()
-                    .filter_map(|mut entry| -> Option<Result<_, Error>> {
-                        let url = entry
-                            .links()
-                            .iter()
-                            .next()
-                            .ok_or_else(|| err_msg("missing link"))
-                            .map(|link| link.href())
-                            .and_then(|address| Uri::from_str(address).map_err(From::from));
-                        let url = match url {
-                            Ok(url) => url,
-                            Err(err) => return Some(Err(err)),
-                        };
-                        let future = extract_comic_info(&client, url.clone()).map(move |info| {
+            let entries: Result<Vec<_>, _> = feed
+                .entries()
+                .iter()
+                .cloned()
+                .map(|mut entry| {
+                    let url = entry
+                        .links()
+                        .iter()
+                        .next()
+                        .ok_or_else(|| err_msg("entry without a link"))
+                        .map(|link| link.href())
+                        .and_then(|address| Uri::from_str(address).map_err(From::from))?;
+                    let client2 = client.clone();
+                    let extractor = extract_comic_info(&client, url.clone())
+                        .and_then(move |info| {
+                            if embed_images {
+                                let image_url = info
+                                    .image_url
+                                    .clone()
+                                    .ok_or_else(|| err_msg("entry without a comic"));
+                                future::Either::A(
+                                    future::result(image_url)
+                                        .and_then(|url| Uri::from_str(&url).map_err(From::from))
+                                        .and_then(move |url| create_data_url(&client2, url))
+                                        .map(|url| ComicInfo {
+                                            image_url: Some(url),
+                                            ..info
+                                        }),
+                                )
+                            } else {
+                                future::Either::B(future::ok(info))
+                            }
+                        })
+                        .map(move |info| {
                             let content = create_content(&info.image_url?);
                             entry.set_content(content);
                             entry.set_id(url.to_string());
@@ -139,10 +177,11 @@ fn create_feed(
                             }
                             Some(entry)
                         });
-                        Some(Ok(future))
-                    })
-                    .collect(),
-            ).and_then(|entries: Vec<_>| {
+                    Ok(extractor)
+                })
+                .collect();
+
+            future::result(entries).and_then(|entries| {
                 future::join_all(entries).and_then(|entries| {
                     let entries: Vec<_> = entries.into_iter().filter_map(|entry| entry).collect();
                     feed.set_entries(entries);
@@ -156,7 +195,7 @@ fn process() -> Result<(), Error> {
     let options = Command::from_args();
     let runtime = Runtime::new()?;
     let client = Client::new();
-    let feed_creator = create_feed(client, options.url.clone()).and_then(|feed| {
+    let feed_creator = create_feed(client, options.url.clone(), options.embed).and_then(|feed| {
         if let Some(path) = options.output {
             let mut file = File::create(path)?;
             feed.write_to(file)

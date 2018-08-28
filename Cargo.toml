@@ -4,8 +4,8 @@ description = "Generate Dilbert Atom feed with images."
 license = "MIT"
 name = "dilbert-feed"
 publish = false
-repository = "https://bitbucket.org/Soft/dilbert-feed"
-version = "0.1.1"
+repository = "https://github.com/Soft/dilbert-feed"
+version = "0.2.0"
 
 [dependencies]
 atom_syndication = "0.6.0"
@@ -16,6 +16,11 @@ select = "0.4.2"
 structopt = "0.2.10"
 structopt-derive = "0.2.10"
 tokio = "0.1.8"
+base64 = "0.9.2"
+
+[dependencies.tree_magic]
+version = "0.2.0"
+default_features = false
 
 [profile.release]
 panic = "abort"
