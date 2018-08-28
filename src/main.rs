@@ -44,7 +44,6 @@ struct Command {
     output: Option<String>,
 }
 
-#[derive(Clone)]
 struct ComicInfo {
     title: Option<String>,
     image_url: Option<String>,
