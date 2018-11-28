@@ -3,18 +3,21 @@ extern crate base64;
 extern crate failure;
 extern crate htmlescape;
 extern crate hyper;
+extern crate hyper_tls;
+extern crate num_cpus;
 extern crate select;
 extern crate structopt;
-extern crate tree_magic;
-#[macro_use]
 extern crate structopt_derive;
 extern crate tokio;
+extern crate tree_magic;
 
 use atom_syndication::{Content, ContentBuilder, Feed, LinkBuilder};
 use failure::{err_msg, Error};
 use hyper::body::Body;
-use hyper::client::{Client, HttpConnector};
+use hyper::client::connect::Connect;
+use hyper::client::Client;
 use hyper::{Response, Uri};
+use hyper_tls::HttpsConnector;
 use select::document::Document;
 use select::predicate::Class;
 use structopt::StructOpt;
@@ -27,14 +30,17 @@ use std::process;
 use std::str;
 use std::str::FromStr;
 
-const SOURCE_URL: &str = "http://dilbert.com/feed";
-const ICON_URL: &str = "http://dilbert.com/favicon.ico";
+const SOURCE_URL: &str = "https://dilbert.com/feed";
+const ICON_URL: &str = "https://dilbert.com/favicon.ico";
 
 #[global_allocator]
 static ALLOCATOR: System = System;
 
 #[derive(StructOpt)]
-#[structopt(name = "dilbert-feed", about = "Generate Dilbert Atom feed with images.")]
+#[structopt(
+    name = "dilbert-feed",
+    about = "Generate Dilbert Atom feed with images."
+)]
 struct Command {
     #[structopt(short = "u", long = "url", help = "URL for the feed")]
     url: Option<String>,
@@ -53,10 +59,13 @@ fn concat_body(response: Response<Body>) -> impl Future<Item = Vec<u8>, Error = 
     response.into_body().concat2().map(|chunk| chunk.to_vec())
 }
 
-fn extract_comic_info(
-    client: &Client<HttpConnector>,
+fn extract_comic_info<T>(
+    client: &Client<T>,
     url: Uri,
-) -> impl Future<Item = ComicInfo, Error = Error> {
+) -> impl Future<Item = ComicInfo, Error = Error>
+where
+    T: 'static + Sync + Connect,
+{
     client
         .get(url)
         .and_then(concat_body)
@@ -78,10 +87,10 @@ fn extract_comic_info(
         })
 }
 
-fn create_data_url(
-    client: &Client<HttpConnector>,
-    url: Uri,
-) -> impl Future<Item = String, Error = Error> {
+fn create_data_url<T>(client: &Client<T>, url: Uri) -> impl Future<Item = String, Error = Error>
+where
+    T: 'static + Sync + Connect,
+{
     client
         .get(url)
         .and_then(concat_body)
@@ -99,16 +108,18 @@ fn create_content(url: &str) -> Content {
         .value(htmlescape::encode_minimal(&format!(
             r#"<img src="{}">"#,
             url
-        )))
-        .build()
+        ))).build()
         .unwrap()
 }
 
-fn create_feed(
-    client: Client<HttpConnector>,
+fn create_feed<T>(
+    client: Client<T>,
     feed_url: Option<String>,
     embed_images: bool,
-) -> impl Future<Item = Feed, Error = Error> {
+) -> impl Future<Item = Feed, Error = Error>
+where
+    T: 'static + Sync + Connect,
+{
     let uri = Uri::from_str(SOURCE_URL).unwrap();
 
     client
@@ -129,8 +140,7 @@ fn create_feed(
                             .mime_type(Some("application/atom+xml".to_owned()))
                             .build()
                             .unwrap()
-                    })
-                    .collect::<Vec<_>>(),
+                    }).collect::<Vec<_>>(),
             );
             feed.set_icon(Some(ICON_URL.to_owned()));
 
@@ -166,8 +176,7 @@ fn create_feed(
                             } else {
                                 future::Either::B(future::ok(info))
                             }
-                        })
-                        .map(move |info| {
+                        }).map(move |info| {
                             let content = create_content(&info.image_url?);
                             entry.set_content(content);
                             entry.set_id(url.to_string());
@@ -177,8 +186,7 @@ fn create_feed(
                             Some(entry)
                         });
                     Ok(extractor)
-                })
-                .collect();
+                }).collect();
 
             future::result(entries).and_then(|entries| {
                 future::join_all(entries).and_then(|entries| {
@@ -193,7 +201,8 @@ fn create_feed(
 fn process() -> Result<(), Error> {
     let options = Command::from_args();
     let runtime = Runtime::new()?;
-    let client = Client::new();
+    let https = HttpsConnector::new(num_cpus::get())?;
+    let client = Client::builder().build(https);
     let feed_creator = create_feed(client, options.url.clone(), options.embed).and_then(|feed| {
         if let Some(path) = options.output {
             let mut file = File::create(path)?;
