@@ -77,7 +77,13 @@ where
                 .find(Class("img-comic"))
                 .next()
                 .and_then(|image| image.attr("src"))
-                .map(|url| url.to_owned());
+                .map(|url| {
+                    let mut url = url.to_owned();
+                    if url.starts_with("//") {
+                        url.insert_str(0, "https:");
+                    }
+                    url
+                });
             let title = document
                 .find(Class("comic-title-name"))
                 .next()
