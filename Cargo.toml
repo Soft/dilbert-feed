@@ -6,6 +6,7 @@ name = "dilbert-feed"
 publish = false
 repository = "https://github.com/Soft/dilbert-feed"
 version = "0.2.1"
+edition = "2018"
 
 [dependencies]
 atom_syndication = "0.6.0"

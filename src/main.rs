@@ -1,16 +1,3 @@
-extern crate atom_syndication;
-extern crate base64;
-extern crate failure;
-extern crate htmlescape;
-extern crate hyper;
-extern crate hyper_tls;
-extern crate num_cpus;
-extern crate select;
-extern crate structopt;
-extern crate structopt_derive;
-extern crate tokio;
-extern crate tree_magic;
-
 use atom_syndication::{Content, ContentBuilder, Feed, LinkBuilder};
 use failure::{err_msg, Error};
 use hyper::body::Body;
@@ -211,7 +198,7 @@ fn process() -> Result<(), Error> {
     let client = Client::builder().build(https);
     let feed_creator = create_feed(client, options.url.clone(), options.embed).and_then(|feed| {
         if let Some(path) = options.output {
-            let mut file = File::create(path)?;
+            let file = File::create(path)?;
             feed.write_to(file)
                 .map_err(|_| err_msg("failed to serialize feed"))?;
         } else {
