@@ -2,6 +2,7 @@
 
 [![Build Status](https://api.travis-ci.org/Soft/dilbert-feed.svg?branch=master)](https://travis-ci.org/Soft/dilbert-feed)
 [![GitHub release](https://img.shields.io/github/release/Soft/dilbert-feed.svg)](https://github.com/Soft/dilbert-feed/releases)
+[![dependency status](https://deps.rs/repo/github/soft/dilbert-feed/status.svg)](https://deps.rs/repo/github/soft/dilbert-feed)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 The official [Dilbert](http://dilbert.com) Atom feed does not contain embedded
