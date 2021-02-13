@@ -1,25 +1,21 @@
-language: generic
-sudo: required
-
-services:
-  - docker
-
-before_install:
-  - docker pull ekidd/rust-musl-builder:stable
-  - docker run -it -d --name build ekidd/rust-musl-builder:stable bash
-  - docker exec build git clone https://github.com/Soft/dilbert-feed.git .
-  - docker exec build git checkout $TRAVIS_COMMIT
-  - mkdir target
-
-script:
-  - docker exec build bash -c "cargo build --release"
-  - docker exec build strip target/x86_64-unknown-linux-musl/release/dilbert-feed
-  - docker cp build:/home/rust/src/target/x86_64-unknown-linux-musl/release/dilbert-feed target/dilbert-feed
-
-deploy:
-  provider: releases
-  api_key: $GITHUB_OAUTH_TOKEN
-  file: target/dilbert-feed
-  skip_cleanup: true
-  on:
-    branch: master
+language: rust
+jobs:
+  include:
+    - stage: build
+      before_install:
+        - sudo apt-get update
+        - sudo apt-get -y install musl-tools
+      script:
+        - rustup target add x86_64-unknown-linux-musl
+        - cargo build --target x86_64-unknown-linux-musl --release
+        - strip target/x86_64-unknown-linux-musl/release/dilbert-feed
+        - mkdir target/work
+        - cp -t target/work LICENSE README.md target/x86_64-unknown-linux-musl/release/dilbert-feed
+        - tar -czvf dilbert-feed-"${TRAVIS_TAG:-untagged}".tar.gz -C target/work .
+      deploy:
+        provider: releases
+        token: $GITHUB_OAUTH_TOKEN
+        file: dilbert-feed-*.tar.gz
+        edge: true
+        on:
+          tags: true
