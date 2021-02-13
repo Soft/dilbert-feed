@@ -5,25 +5,20 @@ license = "MIT"
 name = "dilbert-feed"
 publish = false
 repository = "https://github.com/Soft/dilbert-feed"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2018"
 
 [dependencies]
-atom_syndication = "0.6.0"
-failure = "0.1.2"
-htmlescape = "0.3.1"
-hyper = "0.12.8"
-select = "0.4.2"
-structopt = "0.2.10"
-structopt-derive = "0.2.10"
-tokio = "0.1.8"
-base64 = "0.10.0"
-hyper-tls = "0.3.1"
-num_cpus = "1.8.0"
-
-[dependencies.tree_magic]
-version = "0.2.0"
-default_features = false
+anyhow = { version = "1" }
+atom_syndication = { version = "0.9" }
+base64 = { version = "0.13" }
+htmlescape = { version = "0.3" }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"] }
+select = { version = "0.5" }
+structopt = { version = "0.3", default-features = false }
+tokio = { version = "1", features = ["net", "rt-multi-thread"] }
+futures = { version = "0.3" }
+tree_magic = { version = "0.2", default_features = false }
 
 [profile.release]
 panic = "abort"
