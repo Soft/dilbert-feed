@@ -17,11 +17,3 @@ Statically linked release binaries available on the [GitHub releases
 page.](https://github.com/Soft/dilbert-feed/releases) These binaries should work
 on most recent Linux systems without any additional dependencies or
 configuration.
-
-Alternatively, `dilbert-feed` can be installed from source using
-[Cargo](https://doc.rust-lang.org/stable/cargo/):
-
-```shell
-cargo install --git 'https://bitbucket.org/Soft/dilbert-feed.git'
-```
-
